@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         Vol2VolData AutoFill (Hybrid)
-// @namespace    https://github.com/pageth
-// @version      3.1.2
+// @namespace    https://github.com/l4nchann
+// @version      3.1.3
 // @description  Auto fill Intraday & OI Data with Auto-Detect Asset
 // @match        https://*.tradingview.com/chart/*
-// @icon         https://raw.githubusercontent.com/pageth/Vol2VolData-AutoFill/refs/heads/main/tradingview.ico
+// @icon         https://raw.githubusercontent.com/l4nchann/TW-Data-AutoFill/refs/heads/main/tradingview.ico
 // @grant        none
 // ==/UserScript==
 
@@ -56,8 +56,7 @@
         document.addEventListener('DOMContentLoaded', () => document.head.appendChild(styleEl));
     }
 
-    // ================= [ ระบบจัดการ API Key (แก้บั๊ก Loop) ] =================
-    // ฟังก์ชันนี้จะแค่อ่านค่าอย่างเดียว ไม่เด้ง Prompt กวนใจ
+    // ================= [ ระบบจัดการ API Key ] =================
     function getApiKey() {
         return localStorage.getItem("API_KEY_FOLDER") ? localStorage.getItem("API_KEY_FOLDER").trim() : "";
     }
@@ -127,7 +126,12 @@
         const rect = el.getBoundingClientRect();
         const cx = rect.left + (rect.width / 2) || 0;
         const cy = rect.top + (rect.height / 2) || 0;
-        const opts = { bubbles: true, cancelable: true, clientX: cx, clientY: cy };
+        const opts = { bubbles: true, cancelable: true, view: window, clientX: cx, clientY: cy };
+
+        if (typeof PointerEvent !== 'undefined') {
+            el.dispatchEvent(new PointerEvent('pointerdown', opts));
+            el.dispatchEvent(new PointerEvent('pointerup', opts));
+        }
         el.dispatchEvent(new MouseEvent('mousedown', opts));
         el.dispatchEvent(new MouseEvent('mouseup', opts));
         el.dispatchEvent(new MouseEvent('click', opts));
@@ -138,24 +142,40 @@
         const rect = el.getBoundingClientRect();
         const cx = rect.left + (rect.width / 2) || 0;
         const cy = rect.top + (rect.height / 2) || 0;
-        const opts = { bubbles: true, cancelable: true, clientX: cx, clientY: cy };
+        const opts = { bubbles: true, cancelable: true, view: window, clientX: cx, clientY: cy };
 
-        el.dispatchEvent(new TouchEvent('touchstart', opts));
-        el.dispatchEvent(new TouchEvent('touchend', opts));
+        if (typeof TouchEvent !== 'undefined') {
+            try {
+                el.dispatchEvent(new TouchEvent('touchstart', opts));
+                el.dispatchEvent(new TouchEvent('touchend', opts));
+            } catch (e) {}
+        }
         el.dispatchEvent(new MouseEvent('click', opts));
         setTimeout(() => {
-            el.dispatchEvent(new TouchEvent('touchstart', opts));
-            el.dispatchEvent(new TouchEvent('touchend', opts));
+            if (typeof TouchEvent !== 'undefined') {
+                try {
+                    el.dispatchEvent(new TouchEvent('touchstart', opts));
+                    el.dispatchEvent(new TouchEvent('touchend', opts));
+                } catch (e) {}
+            }
             el.dispatchEvent(new MouseEvent('click', opts));
             el.dispatchEvent(new MouseEvent('dblclick', opts));
         }, 50);
     }
 
-    function findTargetElement() {
-        let legendItems = Array.from(document.querySelectorAll('[data-qa-id="legend-source-item"], [class*="sourceItem-"]'));
-        for (let item of legendItems) {
-            if (TARGET_NAMES.some(name => item.textContent.includes(name))) {
-                return item.querySelector('[data-qa-id="title-wrapper legend-source-title"], [class*="mainTitle-"]') || item;
+    // ค้นหาปุ่ม Settings (เฟือง) ของ Indicator เป้าหมายโดยตรงจาก DOM ใหม่ของ TradingView
+    function findTargetIndicator() {
+        const legendItems = Array.from(document.querySelectorAll('[data-qa-id="legend-source-item"], [class*="sourceItem-"]'));
+        for (const item of legendItems) {
+            const titleEl = item.querySelector('[data-qa-id="title-wrapper legend-source-title"], [class*="mainTitle-"]');
+            const titleText = titleEl ? titleEl.textContent : item.textContent;
+
+            if (TARGET_NAMES.some(name => titleText.includes(name))) {
+                const settingsBtn = item.querySelector('[data-qa-id="legend-settings-action"], button[aria-label="Settings"]');
+                return {
+                    settingsBtn,
+                    fallbackEl: titleEl || item
+                };
             }
         }
         return null;
@@ -163,7 +183,8 @@
 
     function getAssetPrefix() {
         const titleText = document.title.toUpperCase();
-        const legendTitleEl = document.querySelector('[data-qa-id="title-wrapper legend-source-title"]');
+        // เจาะจงดึงชื่อสินทรัพย์จาก legend-series-item เพื่อไม่ให้ไปชนกับชื่อ Indicator
+        const legendTitleEl = document.querySelector('[data-qa-id="legend-series-item"] [data-qa-id="title-wrapper legend-source-title"], [data-qa-id="title-wrapper legend-source-title"]');
         const legendText = legendTitleEl ? legendTitleEl.textContent.toUpperCase() : "";
         const combinedText = `${titleText} ${legendText}`;
 
@@ -181,7 +202,7 @@
 
     // ================= [ Firebase API Fetcher ] =================
     async function fetchURL(fileName) {
-        if (isApiKeyInvalid) return null; // ถ้ารู้ว่า Key ผิด ให้ยกเลิกการดึงข้อมูลทันที ป้องกัน Loop
+        if (isApiKeyInvalid) return null;
 
         const apiKey = getApiKey();
         if (!apiKey) return null;
@@ -196,7 +217,7 @@
                 return data === null ? null : data;
             } else if (response.status === 401 || response.status === 403) {
                 if (!isApiKeyInvalid) {
-                    isApiKeyInvalid = true; // ล็อกสถานะแจ้งเตือน จะได้เด้งแค่ครั้งเดียว
+                    isApiKeyInvalid = true;
                     alert("❌ API Key ไม่ถูกต้อง หรือไม่มีสิทธิ์เข้าถึง!\n\nระบบจะหยุดดึงข้อมูลชั่วคราว กรุณากดปุ่ม ⚙️ มุมขวาล่างเพื่อตั้งค่าใหม่");
                     localStorage.removeItem("API_KEY_FOLDER");
                 }
@@ -237,7 +258,7 @@
     }
 
     async function handleManualMode() {
-        if (isApiKeyInvalid) return; // ข้ามถ้าคีย์ผิด
+        if (isApiKeyInvalid) return;
         const { taIntraday, taOI } = findTextareas();
         if (!taIntraday && !taOI) return;
         const popup = taIntraday?.closest('[role="dialog"]') || taOI?.closest('[role="dialog"]');
@@ -321,10 +342,15 @@
         document.head.appendChild(styleEl);
 
         try {
-            let targetEl = findTargetElement();
-            if (!targetEl) throw new Error("Target not found");
+            const target = findTargetIndicator();
+            if (!target) throw new Error("Target indicator not found");
 
-            simulateRealisticDoubleClick(targetEl);
+            // คลิกปุ่ม Settings (เฟือง) โดยตรง ถ้าหาไม่เจอค่อย fallback ไปใช้ double click
+            if (target.settingsBtn) {
+                simulateClick(target.settingsBtn);
+            } else {
+                simulateRealisticDoubleClick(target.fallbackEl);
+            }
 
             let textareasFound = false;
             for (let i = 0; i < 40; i++) {
@@ -340,9 +366,11 @@
 
             if (!textareasFound) throw new Error("Popup inputs not loaded in time");
 
-            await new Promise(r => setTimeout(r, 50));
+            await new Promise(r => setTimeout(r, 80));
 
-            const okBtn = Array.from(document.querySelectorAll('button')).find(b => b.textContent.trim().match(/^(OK|ตกลง)$/i));
+            const okBtn = document.querySelector('[role="dialog"] [data-name="submit-button"]')
+                || Array.from(document.querySelectorAll('[role="dialog"] button, button')).find(b => b.textContent.trim().match(/^(OK|ตกลง)$/i));
+
             if (okBtn) {
                 simulateClick(okBtn);
                 cachedIntraday = data.intraday;
@@ -350,6 +378,8 @@
                 showStatusNotify(true, data.prefix);
             } else {
                 document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+                cachedIntraday = data.intraday;
+                cachedOI = data.oi;
                 showStatusNotify(true, data.prefix);
             }
 
@@ -371,8 +401,7 @@
         if (hasLegend) {
             initialLoadComplete = true;
             createResetKeyButton();
-            
-            // เช็คและขอ API Key ครั้งแรกแค่ตอนโหลดเพจ
+
             if (!getApiKey()) {
                 const key = prompt("🔑 กรุณาระบุ API Key สำหรับดึงข้อมูล Vol2Vol:");
                 if (key) localStorage.setItem("API_KEY_FOLDER", key.trim());
